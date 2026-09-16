@@ -1,0 +1,60 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  test:
+    runs-on: self-hosted
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - run: pip install -r requirements.txt
+    - run: python -m compileall app.py
+
+  build-and-deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: self-hosted
+    permissions:
+      contents: read
+      packages: write
+    steps:
+    - uses: actions/checkout@v4
+    - uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    - uses: docker/metadata-action@v5
+      id: meta
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        tags: type=sha
+    - uses: docker/build-push-action@v6
+      with:
+        context: .
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+    - uses: azure/setup-kubectl@v4
+    - name: Deploy to Kubernetes
+    - run: |
+        sudo k3s kubectl apply -f k8s/
+        sudo k3s kubectl -n demo-app set image deployment/demo-app demo-app=${{ steps.meta.outputs.tags }}
+        sudo k3s kubectl -n demo-app rollout status deployment/demo-app --timeout=120s
+    - #run: |
+        #mkdir -p "$HOME/.kube"
+        #echo "$KUBE_CONFIG" | base64 --decode > "$HOME/.kube/config"
+        #kubectl apply -f k8s/
+        #kubectl -n demo-app set image deployment/demo-app demo-app=${{ steps.meta.outputs.tags }}
+        #kubectl -n demo-app rollout status deployment/demo-app --timeout=120s
+      env:
+        #KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
